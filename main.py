@@ -118,4 +118,4 @@ while running:
 
 pygame.quit()
 print("Thanks for play")
-print("Created by: Sarvesh Vijayamanikanda")
+print("Created by: Sarvesh")
