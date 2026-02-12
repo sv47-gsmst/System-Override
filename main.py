@@ -117,4 +117,5 @@ while running:
         running = False
 
 pygame.quit()
-print("Thanks for playing!")
+print("Thanks for play")
+print("Created by: Sarvesh Vijayamanikandan")

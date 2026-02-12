@@ -7,7 +7,7 @@
         "commands": [
             {
                 "match": ".*",
-                "cmd": "git add . && git commit -m 'Auto-update' && git push"
+                "cmd": "git add -A && git commit -m 'Auto-update: ${file}' && git push"
             }
         ]
     },
