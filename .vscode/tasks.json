@@ -1,0 +1,16 @@
+{
+    "editor.tabSize": 4,
+    "terminal.integrated.shell.windows": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "files.autoSave": "afterDelay",
+    "files.autoSaveDelay": 1000,
+    "emeraldwalk.runonsave": {
+        "commands": [
+            {
+                "match": ".*",
+                "cmd": "git add . && git commit -m 'Auto-update' && git push"
+            }
+        ]
+    },
+    "git.enableSmartCommit": true,
+    "git.autofetch": true
+}

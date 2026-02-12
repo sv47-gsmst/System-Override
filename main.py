@@ -117,3 +117,4 @@ while running:
         running = False
 
 pygame.quit()
+print("Thanks for playing!")
