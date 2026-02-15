@@ -1,121 +1,315 @@
-import pygame, time
-from objects import *
-from levels import LEVELS
-from player import Player
-
-# ------------------ INIT ------------------
+import pygame, sys, random, math
 pygame.init()
-WIDTH, HEIGHT = 640, 480
+
+# -------------------- CONSTANTS --------------------
+WIDTH, HEIGHT = 900, 600
+TILE = 40
+COLS, ROWS = WIDTH//TILE, HEIGHT//TILE
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("System Override")
 clock = pygame.time.Clock()
-TILE_SIZE = 32
-font = pygame.font.SysFont(None, 24)
+font = pygame.font.SysFont("consolas", 24)
+large_font = pygame.font.SysFont("consolas", 50, bold=True)
 
-# ------------------ PLAYER ------------------
-player = Player(64, 64, TILE_SIZE-4, 4, health=3)  # added health parameter
+WHITE, BLACK, RED, GREEN, BLUE, GRAY, YELLOW, PURPLE = (
+    (255,255,255),(0,0,0),(200,0,0),(0,200,0),(0,100,255),(60,60,60),(255,255,0),(255,0,255)
+)
 
-# ------------------ GAME STATE ------------------
-current_level = 0
-level_start_time = time.time()
-walls, fake_walls, doors, switches, exits, green_tiles, enemies = [], [], [], [], [], [], []
+# -------------------- GLOBALS --------------------
+player = None
+bullets = []
+particles = []
+enemies = []
+current_level = 1
+total_time = 0
 
-# ------------------ LOAD LEVEL ------------------
-def load_level(index):
-    global walls, fake_walls, doors, switches, exits, green_tiles, enemies, player, level_start_time
-    walls, fake_walls, doors, switches, exits, green_tiles, enemies = [], [], [], [], [], [], []  # reset lists
-    level_start_time = time.time()  # added: reset level timer
-    layout = LEVELS[index]
+# -------------------- PLAYER --------------------
+class Player:
+    def __init__(self):
+        self.rect = pygame.Rect(TILE+5, TILE+5, TILE-10, TILE-10)
+        self.speed = 4
+        self.health = 100
+        self.max_health = 100
 
-    # First pass: create objects
-    for y, row in enumerate(layout):
-        for x, tile in enumerate(row):
-            px, py = x * TILE_SIZE, y * TILE_SIZE
-            if tile == "W": walls.append(Wall(px, py, TILE_SIZE))
-            elif tile == "F": fake_walls.append(FakeWall(px, py, TILE_SIZE))
-            elif tile == "D": doors.append(Door(px, py, TILE_SIZE))
-            elif tile == "S": switches.append(Switch(px, py, TILE_SIZE))  # added switch
-            elif tile == "E": exits.append(Exit(px, py, TILE_SIZE))  # added exit
-            elif tile == "G": green_tiles.append(GreenTile(px, py, TILE_SIZE))
-            elif tile == "P": player.rect.x, player.rect.y = px + 2, py + 2  # player spawn
-            elif tile == "X": enemies.append(ShooterEnemy(px, py, TILE_SIZE, speed=1))  # added slower enemy
+    def move(self, dx, dy, walls):
+        self.rect.x += dx
+        for w in walls:
+            if self.rect.colliderect(w):
+                if dx>0: self.rect.right=w.left
+                if dx<0: self.rect.left=w.right
+        self.rect.y += dy
+        for w in walls:
+            if self.rect.colliderect(w):
+                if dy>0: self.rect.bottom=w.top
+                if dy<0: self.rect.top=w.bottom
 
-    # Second pass: link switches to doors and exits
-    for sw in switches:
-        sw.linked_doors = doors  # added linking doors to switches
-        sw.linked_exits = exits  # added linking exits to switches
+    def draw(self):
+        pygame.draw.rect(screen, BLUE, self.rect)
 
-# Initial load
-load_level(current_level)
+# -------------------- BULLET --------------------
+class Bullet:
+    def __init__(self,pos,target,speed=3):
+        self.rect = pygame.Rect(pos[0],pos[1],8,8)
+        dx,dy = target[0]-pos[0], target[1]-pos[1]
+        dist = math.hypot(dx,dy)
+        if dist !=0: dx/=dist; dy/=dist
+        self.vel=(dx*speed,dy*speed)
+        self.spawn_time = pygame.time.get_ticks()
 
-# ------------------ GAME LOOP ------------------
-running = True
-while running:
-    dt = clock.tick(60)
-    keys = pygame.key.get_pressed()
+    def move(self):
+        self.rect.x += self.vel[0]
+        self.rect.y += self.vel[1]
+        if pygame.time.get_ticks()-self.spawn_time > 2000:
+            if self in bullets: bullets.remove(self)
+        elif self.rect.colliderect(player.rect):
+            player.health -= 2
+            if self in bullets: bullets.remove(self)
 
-    # ------------------ EVENTS ------------------
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT: running = False
+    def draw(self):
+        pygame.draw.rect(screen,YELLOW,self.rect)
 
-    # ------------------ PLAYER ------------------
-    player.move(keys, walls, doors)  # added walls and doors collision
+# -------------------- PARTICLES --------------------
+def spawn_particles(x,y,color,num=5):
+    for _ in range(num):
+        particles.append([x,y,random.uniform(-2,2),random.uniform(-2,2),color, random.randint(15,30)])
 
-    # ------------------ FAKE WALL DISCOVERY ------------------
-    for fw in fake_walls:
-        if player.rect.colliderect(fw.rect): fw.discovered = True  # added: reveal fake walls when touched
+def update_particles():
+    for p in particles[:]:
+        p[0]+=p[2]; p[1]+=p[3]; p[5]-=1
+        if p[5]<=0: particles.remove(p)
+        else: pygame.draw.circle(screen,p[4],(int(p[0]),int(p[1])),2)
+        if player.rect.collidepoint(p[0],p[1]):
+            player.health -= 1
 
-    # ------------------ SWITCHES ------------------
-    for sw in switches:
-        sw.try_activate(player.rect, keys)  # added: activate doors and exits
+# -------------------- SWITCH --------------------
+class Switch:
+    def __init__(self,x,y,decoy=False):
+        self.rect = pygame.Rect(x,y,25,25)
+        self.decoy = decoy
+        self.active = True
 
-    # ------------------ ENEMIES ------------------
-    for enemy in enemies:
-        enemy.move_towards_player(player)          # move enemy toward player
-        enemy.shoot(player)                         # enemy shoots
-        enemy.update_bullets(player, walls)        # bullets hit player or walls
+    def draw(self):
+        color = PURPLE if self.decoy else GREEN
+        pygame.draw.rect(screen,color,self.rect)
 
-    # ------------------ EXIT CHECK ------------------
-    for ex in exits:
-        if ex.active and player.rect.colliderect(ex.rect):  # added: can only exit if activated
-            current_level += 1
-            if current_level < len(LEVELS):
-                load_level(current_level)
-            else:
-                running = False
+    def try_activate(self, keys, mouse_pos, mouse_pressed):
+        if not self.active: return False
+        if self.rect.colliderect(player.rect):
+            kb_press = keys[pygame.K_e] or keys[pygame.K_SPACE] or keys[pygame.K_c]
+            click = mouse_pressed[0] and self.rect.collidepoint(mouse_pos)
+            if kb_press or click:
+                self.active=False
+                return True
+        return False
 
-    # ------------------ DRAW ------------------
-    screen.fill((0,0,0))
-    for w in walls: pygame.draw.rect(screen, (100,100,100), w.rect)
-    for fw in fake_walls:
-        if fw.discovered: pygame.draw.rect(screen, (50,50,50), fw.rect)
-    for d in doors:
-        if not d.hidden: pygame.draw.rect(screen, (0,0,255), d.rect)  # added: only show doors when revealed
-    for sw in switches:
-        color = (0,255,0) if sw.active else (0,155,0)  # added: switch color depends on active
-        pygame.draw.rect(screen, color, sw.rect)
-    for ex in exits:
-        color = (0,255,255) if ex.active else (255,0,255)  # added: exit color depends on active
-        pygame.draw.rect(screen, color, ex.rect)
-    for gt in green_tiles: pygame.draw.rect(screen, (0,150,0), gt.rect)
-    for enemy in enemies:
-        pygame.draw.rect(screen, (255,0,0), enemy.rect)
-        for bullet in enemy.bullets: pygame.draw.rect(screen, (255,255,255), bullet["rect"])
-    pygame.draw.rect(screen, (0,255,0), player.rect)
+# -------------------- MAZE --------------------
+def generate_maze():
+    grid=[[1 for _ in range(COLS)] for _ in range(ROWS)]
+    def carve(x,y):
+        dirs=[(2,0),(-2,0),(0,2),(0,-2)]
+        random.shuffle(dirs)
+        for dx,dy in dirs:
+            nx,ny=x+dx,y+dy
+            if 0<nx<COLS-1 and 0<ny<ROWS-1:
+                if grid[ny][nx]==1:
+                    grid[ny][nx]=0
+                    grid[y+dy//2][x+dx//2]=0
+                    carve(nx,ny)
+    grid[1][1]=0; carve(1,1)
+    grid[1][1]=0; grid[1][2]=0; grid[2][1]=0
+    return grid
 
-    # ------------------ HUD ------------------
-    elapsed = int(time.time() - level_start_time)
-    hud_text = f"Level: {current_level+1}  Health: {player.health}  Time: {elapsed}s  Controls: WASD/Arrows + Space"  # added health display
-    hud = font.render(hud_text, True, (255,255,255))
-    pygame.draw.rect(screen, (50,50,50), (0,0,WIDTH,25))
-    screen.blit(hud, (5,3))
-    pygame.display.flip()
+def place_switches(maze,num_decoys=2):
+    switches=[]
+    free_tiles=[(x,y) for y in range(ROWS) for x in range(COLS) if maze[y][x]==0]
+    exit_tile=random.choice(free_tiles)
+    ex,ey=exit_tile
+    switches.append(Switch(ex*TILE+TILE//4,ey*TILE+TILE//4,decoy=False))
+    for _ in range(num_decoys):
+        while True:
+            dt=random.choice(free_tiles)
+            if dt!=exit_tile:
+                dx,dy=dt
+                switches.append(Switch(dx*TILE+TILE//4,dy*TILE+TILE//4,decoy=True))
+                break
+    return switches
 
-    # ------------------ GAME OVER ------------------
-    if player.health <= 0:  # added: check for player death
-        print("GAME OVER")
-        running = False
+# -------------------- ENEMY --------------------
+class Enemy:
+    def __init__(self,level):
+        self.rect = pygame.Rect(random.randint(5,WIDTH-35),random.randint(5,HEIGHT-35),30,30)
+        self.base_speed = player.speed*0.1
+        self.max_speed = player.speed*0.25
+        scale = min(level/15,1)
+        self.speed = self.base_speed + (self.max_speed-self.base_speed)*scale
+        self.bullet_timer = random.randint(30,90)
 
-pygame.quit()
-print("Thanks for play")
-print("Created heh")
+    def move(self):
+        dx = player.rect.centerx - self.rect.centerx
+        dy = player.rect.centery - self.rect.centery
+        dist = math.hypot(dx,dy)
+        if dist!=0:
+            dx/=dist; dy/=dist
+            self.rect.x += dx*self.speed
+            self.rect.y += dy*self.speed
+
+    def shoot(self):
+        if self.bullet_timer<=0:
+            bullets.append(Bullet(self.rect.center,player.rect.center,speed=3+self.speed))
+            self.bullet_timer=random.randint(60,120)
+        else:
+            self.bullet_timer-=1
+
+    def draw(self):
+        pygame.draw.rect(screen,RED,self.rect)
+
+# -------------------- UI --------------------
+def draw_health():
+    pygame.draw.rect(screen,RED,(10,10,200,20))
+    pygame.draw.rect(screen,GREEN,(10,10,200*player.health/player.max_health,20))
+
+def draw_stats(level,total_time):
+    txt=font.render(f"Level:{level} Time:{total_time}s",True,WHITE)
+    screen.blit(txt,(10,40))
+
+# -------------------- INTRO --------------------
+def intro_screen():
+    intro=True
+    while intro:
+        screen.fill(BLACK)
+        title = large_font.render("SYSTEM OVERRIDE",True,WHITE)
+        dev = font.render("Developer: Sarvesh V",True,WHITE)
+        thanks = font.render("Thanks Hack Club Flavor Town!",True,WHITE)
+        start = font.render("Press ENTER to Start",True,WHITE)
+        screen.blit(title,(WIDTH//2-title.get_width()//2, HEIGHT//3))
+        screen.blit(dev,(WIDTH//2-dev.get_width()//2, HEIGHT//2))
+        screen.blit(thanks,(WIDTH//2-thanks.get_width()//2, HEIGHT//2+40))
+        screen.blit(start,(WIDTH//2-start.get_width()//2, HEIGHT-100))
+        pygame.display.flip()
+        for event in pygame.event.get():
+            if event.type==pygame.QUIT: pygame.quit(); sys.exit()
+            if event.type==pygame.KEYDOWN and event.key==pygame.K_RETURN:
+                intro=False
+        clock.tick(60)
+
+# -------------------- POST LEVEL 15 PROMPT --------------------
+def post_level_prompt():
+    typing_text=""
+    full_text="Do you want to EXIT or continue with random levels?"
+    text_index=0
+    typing_timer=0
+    while True:
+        screen.fill(BLACK)
+        keys=pygame.key.get_pressed()
+        mouse_pos=pygame.mouse.get_pos()
+        mouse_pressed=pygame.mouse.get_pressed()
+        typing_timer+=1
+        if typing_timer%5==0 and text_index<len(full_text):
+            typing_text+=full_text[text_index]; text_index+=1
+        txt=font.render(typing_text,True,WHITE)
+        opt1=font.render("Press 1 - EXIT",True,WHITE)
+        opt2=font.render("Press 2 - CONTINUE RANDOM",True,WHITE)
+        screen.blit(txt,(WIDTH//2-350,HEIGHT//2-50))
+        screen.blit(opt1,(WIDTH//2-200,HEIGHT//2))
+        screen.blit(opt2,(WIDTH//2-200,HEIGHT//2+40))
+        pygame.display.flip()
+        for event in pygame.event.get():
+            if event.type==pygame.QUIT: pygame.quit(); sys.exit()
+        if keys[pygame.K_1]: return False
+        if keys[pygame.K_2]: return True
+        clock.tick(60)
+
+# -------------------- GAME LOOP --------------------
+def game():
+    global player, bullets, particles, enemies, current_level, total_time
+    intro_screen()
+    current_level=1
+    total_time=0
+    continue_random=True
+    start_time=pygame.time.get_ticks()
+
+    while True:
+        maze=generate_maze()
+        player=Player()
+        walls=[pygame.Rect(x*TILE,y*TILE,TILE,TILE) for y in range(ROWS) for x in range(COLS) if maze[y][x]==1]
+        switches=place_switches(maze)
+        bullets=[]
+        enemies=[Enemy(current_level) for _ in range(3)]
+        while True:
+            screen.fill(BLACK)
+            keys=pygame.key.get_pressed()
+            mouse_pos=pygame.mouse.get_pos()
+            mouse_pressed=pygame.mouse.get_pressed()
+            for event in pygame.event.get():
+                if event.type==pygame.QUIT: pygame.quit(); sys.exit()
+
+            # Player movement
+            if player.health>0:
+                dx=dy=0
+                if keys[pygame.K_LEFT] or keys[pygame.K_a]: dx=-player.speed
+                if keys[pygame.K_RIGHT] or keys[pygame.K_d]: dx=player.speed
+                if keys[pygame.K_UP] or keys[pygame.K_w]: dy=-player.speed
+                if keys[pygame.K_DOWN] or keys[pygame.K_s]: dy=player.speed
+                player.move(dx,dy,walls)
+
+            # Draw walls
+            for w in walls: pygame.draw.rect(screen,GRAY,w)
+
+            # Switches
+            exit_activated=False
+            for s in switches:
+                if s.active:
+                    s.draw()
+                    if s.try_activate(keys, mouse_pos, mouse_pressed):
+                        if s.decoy:
+                            for _ in range(50): spawn_particles(random.randint(0,WIDTH),random.randint(0,HEIGHT),PURPLE)
+                        else:
+                            exit_activated=True
+
+            # Enemies
+            for e in enemies:
+                e.move()
+                e.shoot()
+                e.draw()
+
+            # Bullets
+            for b in bullets[:]:
+                b.move()
+                b.draw()
+
+            # Particles
+            player.draw()
+            update_particles()
+
+            # UI
+            total_time=(pygame.time.get_ticks()-start_time)//1000
+            draw_health(); draw_stats(current_level,total_time)
+
+            # Level completion
+            if exit_activated:
+                player.health=min(player.max_health,player.health+player.max_health*0.25)
+                current_level+=1
+                break
+
+            # Game over
+            if player.health<=0:
+                screen.fill(BLACK)
+                over=font.render("GAME OVER",True,WHITE)
+                restart=font.render("Press R to Restart",True,WHITE)
+                screen.blit(over,(WIDTH//2-over.get_width()//2,HEIGHT//2-20))
+                screen.blit(restart,(WIDTH//2-restart.get_width()//2,HEIGHT//2+20))
+                pygame.display.flip()
+                keys=pygame.key.get_pressed()
+                if keys[pygame.K_r]: game()
+                continue
+
+            pygame.display.flip()
+            clock.tick(60)
+
+        # After every 15 levels
+        if current_level>=15 and current_level%15==0:
+            continue_random=post_level_prompt()
+            if not continue_random: pygame.quit(); sys.exit()
+
+# -------------------- RUN --------------------
+game()
