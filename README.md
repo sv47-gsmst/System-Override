@@ -46,3 +46,6 @@ Installation
 git clone <your-repo-url>
 cd system-override
 python main.py
+
+
+Thank you ChatGPT for helping me debug and with inspiration!
